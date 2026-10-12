@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# Local icon (the OMEN Gaming Hub logo is HP's trademark: kept out of the
+# public repo). Put your own omen-hub-<size>.png here; without them the
+# installer uses share/omen-hub.svg.
+share/icons/

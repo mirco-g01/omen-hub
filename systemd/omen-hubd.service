@@ -1,0 +1,19 @@
+[Unit]
+Description=OMEN Hub privileged helper (whitelisted fan/profile/service actions)
+Documentation=file:///usr/local/lib/omen-hub/README.md
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/local/lib/omen-hub/omen-hubd
+Environment=OMEN_HUB_SOCKET=/run/omen-hub/hub.sock
+RuntimeDirectory=omen-hub
+RuntimeDirectoryMode=0755
+StateDirectory=omen-hub
+Restart=on-failure
+RestartSec=2
+# Wakes up only for requests and a 4 s read of AC/online.
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

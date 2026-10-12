@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- OMEN Hub fallback icon: a fan (cooling, profiles) over the RGB light bar.
+     Used when share/icons/omen-hub-*.png (a local, untracked icon) is absent. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3036"/>
+      <stop offset="1" stop-color="#16191c"/>
+    </linearGradient>
+    <linearGradient id="bar" gradientUnits="userSpaceOnUse" x1="22" y1="0" x2="107" y2="0">
+      <stop offset="0" stop-color="#2aa198"/>
+      <stop offset="0.35" stop-color="#3987e5"/>
+      <stop offset="0.7" stop-color="#c77dff"/>
+      <stop offset="1" stop-color="#eb6834"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2aa198" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#2aa198" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#bg)"/>
+  <rect x="6.5" y="6.5" width="115" height="115" rx="25.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+  <circle cx="64" cy="54" r="38" fill="url(#glow)"/>
+  <circle cx="64" cy="54" r="33" fill="none" stroke="#2aa198" stroke-width="5"/>
+  <g fill="#e8e2d4">
+    <path id="blade" d="M64 54 C61 44 62 33 70 27 C77 31 77 41 70 50 Z"/>
+    <use href="#blade" transform="rotate(72 64 54)"/>
+    <use href="#blade" transform="rotate(144 64 54)"/>
+    <use href="#blade" transform="rotate(216 64 54)"/>
+    <use href="#blade" transform="rotate(288 64 54)"/>
+  </g>
+  <circle cx="64" cy="54" r="7" fill="#2aa198"/>
+  <circle cx="64" cy="54" r="3" fill="#16191c"/>
+  <g fill="url(#bar)">
+    <rect x="22" y="99" width="19" height="8" rx="4"/>
+    <rect x="44" y="99" width="19" height="8" rx="4"/>
+    <rect x="66" y="99" width="19" height="8" rx="4"/>
+    <rect x="88" y="99" width="19" height="8" rx="4"/>
+  </g>
+</svg>

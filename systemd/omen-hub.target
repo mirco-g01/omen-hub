@@ -1,0 +1,10 @@
+[Unit]
+Description=OMEN Hub: servizi hardware dell'HP OMEN (ventole, energia, luci)
+Documentation=file:///usr/local/lib/omen-hub/README.md
+# Members are bound with PartOf= drop-ins (50-omen-hub.conf), written by
+# install.sh: stop/restart of this target stops/restarts them all. No Wants=
+# on purpose: a member disabled from the hub stays off. Start the group from
+# the hub (Servizi → Gruppo OMEN), which starts the enabled members.
+
+[Install]
+WantedBy=multi-user.target

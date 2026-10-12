@@ -1,0 +1,7 @@
+[Unit]
+Description=OMEN Hub: servizi di sessione dell'HP OMEN (tasti luminosità, notifiche luci, LED muto)
+Documentation=file:///usr/local/lib/omen-hub/README.md
+# See omen-hub.target: same PartOf= arrangement, for the session's units.
+
+[Install]
+WantedBy=default.target

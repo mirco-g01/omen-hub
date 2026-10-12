@@ -1,0 +1,9 @@
+#!/usr/bin/python3 -I
+"""omen-hubd launcher (installed root-owned in /usr/local/lib/omen-hub)."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from omen_hub.daemon import main  # noqa: E402
+
+sys.exit(main())

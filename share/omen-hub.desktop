@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=OMEN Hub
+GenericName=Ventole, profili e servizi
+Comment=Ventole, profili CPU/GPU, luci e servizi dell'HP OMEN in un'unica app
+Exec=/usr/local/bin/omen-hub
+Icon=omen-hub
+Categories=System;Settings;HardwareSettings;
+Keywords=fan;ventole;cpu;gpu;omen;profili;tastiera;luminosità;
+StartupWMClass=omen-hub
+X-KDE-Shortcuts=DOS
