@@ -393,6 +393,9 @@ class Report:
                 "e includono schermo e periferiche; 'CPU package' è RAPL (solo CPU).",
                 "- Lo stato GPU viene da /sys/bus/pci/devices/<gpu>/power/runtime_status "
                 "(suspended = D3cold, ~0 W; active = ~6-10 W anche a riposo). nvidia-smi la sveglierebbe.",
+                "- Se la GPU resta accesa senza processi che la usano, guarda /proc/driver/nvidia/gpus/*/power: "
+                "«Runtime D3 status: Not supported» con kernel ≥ 7.3 è il bug nvidia-open del nv-probe "
+                "kthread (omen_hub/gpufix.py, correzione dalla barra in cima all'app).",
                 "- Le ventole durante lo sleep si leggono nei primi campioni dopo il risveglio "
                 "(campionamento 0,25 s): se lì sono a 0 RPM, durante il sonno erano ferme.",
                 "- 'Pacchetto' a 100 °C per un istante è normale (hotspot di un P-core); conta la "

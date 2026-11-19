@@ -27,6 +27,12 @@ rm -rf "$LIB/omen_hub.old"
 mv "$LIB/omen_hub.new" "$LIB/omen_hub"
 rm -rf "$LIB/omen_hub.old"
 install -m 0755 "$SRC/omen-hubd" "$SRC/omen-hub" "$LIB/"
+# The «Luminosità e colore» twin with the adaptive brightness switch (installed
+# per user from the app; here only the source the app copies from).
+rm -rf "$LIB/plasma"
+cp -r "$SRC/plasma" "$LIB/plasma"
+chown -R root:root "$LIB/plasma"
+chmod -R u=rwX,go=rX "$LIB/plasma"
 install -m 0644 "$SRC/README.md" "$LIB/" 2>/dev/null || true
 
 # Snapshot of the live sleep hooks: what "Installa hook" restores after a
@@ -51,6 +57,14 @@ echo "→ gruppo OMEN (omen-hub.target + omen-hub-user.target)"
 install -m 0644 "$SRC/systemd/omen-hub.target" /etc/systemd/system/omen-hub.target
 install -m 0644 "$SRC/systemd/omen-hub-user.target" /etc/systemd/user/omen-hub-user.target
 /usr/bin/python3 -I "$LIB/omen-hubd" --setup-group | sed 's/^/   drop-in /'
+echo "→ correzione GPU NVIDIA: hook pacman + avvisi di sessione"
+install -D -m 0644 "$SRC/pacman/95-omen-hub-gpufix.hook" /etc/pacman.d/hooks/95-omen-hub-gpufix.hook
+install -m 0644 "$SRC/systemd/omen-hub-notify.service" "$SRC/systemd/omen-hub-notify.path" /etc/systemd/user/
+# Adaptive brightness: installed, not enabled (the switch in Luci e schermo
+# enables it per user). A running copy is restarted to pick up the new code.
+echo "→ luminosità adattiva (servizio utente omen-hub-luce, si attiva dall'app)"
+install -m 0644 "$SRC/systemd/omen-hub-luce.service" /etc/systemd/user/omen-hub-luce.service
+systemctl --global enable omen-hub-notify.path omen-hub-notify.service >/dev/null 2>&1
 systemctl daemon-reload
 systemctl enable omen-hubd.service >/dev/null
 systemctl restart omen-hubd.service
@@ -63,6 +77,9 @@ if [[ -n "${SUDO_USER:-}" ]]; then
          DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SUDO_USER")/bus")
   sudo -u "$SUDO_USER" "${U_ENV[@]}" systemctl --user daemon-reload 2>/dev/null || true
   sudo -u "$SUDO_USER" "${U_ENV[@]}" systemctl --user start omen-hub-user.target 2>/dev/null || true
+  sudo -u "$SUDO_USER" "${U_ENV[@]}" systemctl --user start omen-hub-notify.path 2>/dev/null || true
+  sudo -u "$SUDO_USER" "${U_ENV[@]}" systemctl --user try-restart omen-hub-luce.service 2>/dev/null || true
+  sudo -u "$SUDO_USER" "${U_ENV[@]}" /usr/bin/python3 -I "$LIB/omen-hub" --vassoio aggiorna 2>/dev/null | sed 's/^/   vassoio: /' || true
 fi
 
 ln -sf "$LIB/omen-hub" /usr/local/bin/omen-hub
@@ -94,6 +111,8 @@ fi
 
 for i in $(seq 20); do [[ -S /run/omen-hub/hub.sock ]] && break; sleep 0.2; done
 if [[ -S /run/omen-hub/hub.sock ]]; then
+  # First check: prints the state of the NVIDIA fix, and notifies if needed.
+  /usr/bin/python3 -I "$LIB/omen-hubd" --gpufix-check | sed 's/^/   /'
   echo "OK: omen-hubd attivo. Avvia l'app dal menu (OMEN Hub) o con: omen-hub"
 else
   echo "omen-hubd non è partito: journalctl -u omen-hubd -n 30" >&2

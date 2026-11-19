@@ -104,7 +104,7 @@ class DashboardPage(Page):
         if self.ctx.hub_ok:
             self.ctx.hub({"cmd": "profiles.get"}, lambda r: self._set_store(r["store"]))
         else:
-            self._set_store(profiles.load(paths.PROFILES, paths.AUTOCPUFREQ_CONF))
+            self._set_store(profiles.load(paths.PROFILES))
 
     def activated(self):
         self.load_profiles()

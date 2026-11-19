@@ -1,4 +1,5 @@
-"""Luci e schermo: panel and keyboard brightness, their per-power-source
+"""Luci e schermo: panel and keyboard brightness, adaptive brightness (the
+webcam as a light sensor, gui/adaptive_card.py), their per-power-source
 levels in powerdevil, the omen-fx brightness keys and idle dim, and quick
 omen-fx actions (the full editor is the Studio luci sub-page)."""
 
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout
 
 from ... import desktop
 from .. import widgets as W
+from ..adaptive_card import AdaptiveCard
 from . import Page
 
 
@@ -49,11 +51,16 @@ class LightingPage(Page):
         self.sl_disp.valueChanged.connect(lambda v: self._queue("disp", v))
         self.sl_kbd.valueChanged.connect(lambda v: self._queue("kbd", v))
 
+        # adaptive brightness ---------------------------------------------------------------
+        self.adaptive = AdaptiveCard(ctx)
+        self.add(self.adaptive)
+
         # per profile ----------------------------------------------------------------------
         pp = W.Card("Livelli per alimentazione",
                     "Applicati da powerdevil quando cambia l'alimentazione (Impostazioni → "
                     "Risparmio energetico). Al salvataggio powerdevil viene riavviato, perché "
-                    "rilegge i livelli solo al cambio di profilo.")
+                    "rilegge i livelli solo al cambio di profilo. Con la luminosità adattiva "
+                    "attiva valgono solo per i pochi secondi prima della nuova misura.")
         g = QGridLayout()
         g.setHorizontalSpacing(18)
         g.setVerticalSpacing(10)
@@ -145,8 +152,12 @@ class LightingPage(Page):
         def read():
             return desktop.brightness(), desktop.kbd_brightness(), desktop.powerdevil_profiles()
         W.run_async(read, self._show_levels, lambda m: self.ctx.toast(m, "err"))
+        self.adaptive.activated()
         self._refresh_fx()
         self._load_keys()
+
+    def deactivated(self):
+        self.adaptive.deactivated()
 
     def _show_levels(self, res):
         disp, kbd, pd = res

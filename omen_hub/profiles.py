@@ -13,14 +13,16 @@ import json
 import re
 from pathlib import Path
 
-from . import cpuconf
+from . import cpuconf, fanconf
 
 NAME_RE = re.compile(r"^[\w][\w .()+-]{0,39}$", re.UNICODE)
 FAN_MODES = ("curve", "auto", "max")
 
-# Built-in starting points. The first run also adds the two profiles found in
-# auto-cpufreq.conf ("... (attuale)") and assigns them, so nothing changes
-# until the user picks something else.
+# Built-in profiles: always in the library (editable, not removable) and
+# always listed first, in this order; the user's own profiles follow.
+# Prestazioni and Massime both run platform "performance" (CPU PL1/PL2 170 W,
+# GPU cTGP + Dynamic Boost 115 -> 140 W): Massime only adds responsiveness
+# (EPP performance, 2.4 GHz floor = P-core base clock) and fans that never stop.
 PRESETS: dict[str, dict] = {
     "Silenzioso": {
         "description": "Batteria al massimo: niente turbo, piattaforma low-power.",
@@ -35,19 +37,21 @@ PRESETS: dict[str, dict] = {
         "fan": None, "color": "#009782",
     },
     "Prestazioni": {
-        "description": "Turbo sempre, cTGP GPU attivo (platform performance).",
+        "description": "Watt al massimo (CPU 170 W, GPU 115 → 140 W), turbo sempre; "
+                       "a riposo i core scendono a 800 MHz e le ventole seguono la tua curva.",
         "governor": "powersave", "epp": "balance_performance", "turbo": "always",
-        "platform_profile": "performance", "min_freq": 1400, "max_freq": None,
+        "platform_profile": "performance", "min_freq": None, "max_freq": None,
         "fan": None, "color": "#e8833a",
     },
     "Massime": {
-        "description": "EPP performance, turbo sempre, cTGP GPU e ventole al massimo: "
-                       "per benchmark e giochi.",
+        "description": "Come Prestazioni ma più reattivo: EPP performance, mai sotto 2,4 GHz, "
+                       f"ventole sempre accese (curva «{fanconf.ALWAYS_ON_CURVE}»). Per giochi e benchmark.",
         "governor": "powersave", "epp": "performance", "turbo": "always",
-        "platform_profile": "performance", "min_freq": None, "max_freq": None,
-        "fan": {"mode": "max", "curve": None}, "color": "#d9534f",
+        "platform_profile": "performance", "min_freq": 2400, "max_freq": None,
+        "fan": {"mode": "curve", "curve": fanconf.ALWAYS_ON_CURVE}, "color": "#d9534f",
     },
 }
+DEFAULT_ASSIGN = {"ac": "Prestazioni", "battery": "Silenzioso"}
 
 
 def validate_profile(p: dict, platform_choices: list[str] | None = None,
@@ -160,35 +164,24 @@ def validate_store(store: dict, **kw) -> dict:
     return {"version": 1, "profiles": clean, "assign": out_assign}
 
 
-def seed_from_cpufreq(conf_text: str | None) -> dict:
-    profiles = copy.deepcopy(PRESETS)
-    assign = {"ac": "Prestazioni", "battery": "Bilanciato"}
-    if conf_text:
-        try:
-            sections = cpuconf.parse(conf_text)
-        except Exception:
-            sections = {}
-        for src, label, color in (("ac", "Rete (attuale)", "#c08a2e"),
-                                  ("battery", "Batteria (attuale)", "#3f9d6a")):
-            sec = sections.get(cpuconf.SECTIONS[src])
-            if sec is None:
-                continue
-            p = cpuconf.section_to_profile(sec)
-            p.update(description="Importato da /etc/auto-cpufreq.conf al primo avvio.",
-                     fan=None, color=color)
-            profiles[label] = p
-            assign[src] = label
-    return {"version": 1, "profiles": profiles, "assign": assign}
+def seed() -> dict:
+    """First-run library: the presets only, Prestazioni on mains and Silenzioso
+    on battery."""
+    return {"version": 1, "profiles": copy.deepcopy(PRESETS), "assign": dict(DEFAULT_ASSIGN)}
 
 
-def load(path: Path, cpufreq_conf: Path | None = None) -> dict:
+def with_presets(store: dict) -> dict:
+    """The presets first (re-added if missing), then the user's profiles in
+    their own order. Edited presets keep the user's values."""
+    own = store.get("profiles") or {}
+    ordered = {name: copy.deepcopy(own.get(name, preset)) for name, preset in PRESETS.items()}
+    ordered.update((k, v) for k, v in own.items() if k not in PRESETS)
+    assign = {**DEFAULT_ASSIGN, **(store.get("assign") or {})}
+    return {**store, "profiles": ordered, "assign": assign}
+
+
+def load(path: Path) -> dict:
     try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        text = None
-        if cpufreq_conf is not None:
-            try:
-                text = cpufreq_conf.read_text()
-            except OSError:
-                pass
-        return seed_from_cpufreq(text)
+        return with_presets(json.loads(path.read_text()))
+    except (OSError, ValueError, AttributeError):
+        return seed()

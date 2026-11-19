@@ -1,0 +1,20 @@
+# OMEN Hub: after the NVIDIA driver or the kernel changes, check that the
+# RTD3 fix for kernel >= 7.3 is still in the driver (omen_hub/gpufix.py).
+# Runs after DKMS (70-*) and mkinitcpio (90-*). Only reads, prints one line
+# when the fix must be applied again, and rewrites
+# /var/lib/omen-hub/gpufix-check.json, which wakes omen-hub-notify.path in
+# the desktop session (notification with «Apri OMEN Hub»).
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = nvidia-open
+Target = nvidia-open-dkms
+Target = linux
+Target = linux-headers
+
+[Action]
+Description = OMEN Hub: controllo della correzione RTD3 NVIDIA...
+When = PostTransaction
+Exec = /usr/bin/python3 -I /usr/local/lib/omen-hub/omen-hubd --gpufix-check

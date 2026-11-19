@@ -1,9 +1,26 @@
 #!/usr/bin/env python3
-"""OMEN Hub GUI launcher."""
+"""OMEN Hub GUI launcher (`--notify`: the session notifier, `--adaptive`: the
+adaptive brightness service; neither has a GUI)."""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from omen_hub.gui.app import main  # noqa: E402
+
+if sys.argv[1:2] == ["--notify"]:
+    from omen_hub.notify import main  # noqa: E402
+elif sys.argv[1:2] == ["--adaptive"]:
+    from omen_hub.adaptived import main  # noqa: E402
+elif sys.argv[1:2] == ["--luce"]:
+    from omen_hub.lucectl import main as _luce  # noqa: E402
+
+    def main():
+        return _luce(sys.argv[2:])
+elif sys.argv[1:2] == ["--vassoio"]:
+    from omen_hub.trayapplet import main as _tray  # noqa: E402
+
+    def main():
+        return _tray(sys.argv[2:])
+else:
+    from omen_hub.gui.app import main  # noqa: E402
 
 sys.exit(main())

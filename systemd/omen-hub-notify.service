@@ -1,0 +1,15 @@
+[Unit]
+Description=OMEN Hub: avvisi nella sessione (correzione GPU NVIDIA da applicare)
+Documentation=file:///usr/local/lib/omen-hub/README.md
+# At login, and from omen-hub-notify.path after a pacman transaction.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -I /usr/local/lib/omen-hub/omen-hub --notify
+# notify-send waits for the click; the hub it starts lives in its own scope.
+KillMode=process
+
+[Install]
+WantedBy=graphical-session.target

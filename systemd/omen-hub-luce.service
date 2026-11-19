@@ -1,0 +1,21 @@
+[Unit]
+Description=OMEN Hub: luminosità adattiva (la webcam come sensore di luce)
+Documentation=file:///usr/local/lib/omen-hub/README.md
+# Brightness goes through powerdevil; the session bus and powerdevil must be up.
+After=graphical-session.target plasma-powerdevil.service
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -I /usr/local/lib/omen-hub/omen-hub --adaptive
+# SIGHUP rereads the settings, USR1 measures now, USR2 forgets the corrections.
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+TimeoutStopSec=10
+RestartSec=15
+# A background helper: never in the way of what you are doing.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=graphical-session.target

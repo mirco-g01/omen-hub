@@ -163,7 +163,19 @@ class MainWindow(QMainWindow):
         sl.addWidget(W.label(f"v{__version__}", "faint"))
 
         lay.addWidget(side)
-        lay.addWidget(self.stack, 1)
+        # The NVIDIA RTD3 fix bar sits above every page: hidden while all is well.
+        from .gpufixbar import GpuFixBar
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(0)
+        self.gpufix = GpuFixBar(self.ctx)
+        bar_box = QHBoxLayout()
+        bar_box.setContentsMargins(28, 16, 28, 0)
+        bar_box.addWidget(self.gpufix)
+        rl.addLayout(bar_box)
+        rl.addWidget(self.stack, 1)
+        lay.addWidget(right, 1)
 
         self.toast = Toast(root)
         self.timer = QTimer(self, interval=SAMPLE_MS, timeout=self.tick)
@@ -173,6 +185,7 @@ class MainWindow(QMainWindow):
         self.go(0)
         self.timer.start()
         self.hub_timer.start()
+        self.gpufix.start()
 
     def show_toast(self, text, kind="ok"):
         self.toast.show_msg(text, kind)
@@ -238,12 +251,14 @@ class MainWindow(QMainWindow):
     def hideEvent(self, e):
         self.timer.stop()
         self.hub_timer.stop()
+        self.gpufix.stop()
         super().hideEvent(e)
 
     def showEvent(self, e):
         if not self.timer.isActive():
             self.timer.start()
             self.hub_timer.start()
+            self.gpufix.start()
         super().showEvent(e)
 
     def resizeEvent(self, e):

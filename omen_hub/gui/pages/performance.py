@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QLabel, QGridLay
                              QWidget, QColorDialog, QPushButton)
 from PyQt6.QtGui import QColor, QIcon, QPixmap, QPainter
 
-from ... import components, cpuconf, desktop, paths, profiles
+from ... import components, cpuconf, desktop, fanconf, paths, profiles
 from .. import widgets as W
 from . import Page
 
@@ -203,7 +203,7 @@ class PerformancePage(Page):
         if self.ctx.hub_ok:
             self.ctx.hub({"cmd": "profiles.get"}, lambda r: self._set_store(r["store"]))
         else:
-            self._set_store(profiles.load(paths.PROFILES, paths.AUTOCPUFREQ_CONF))
+            self._set_store(profiles.load(paths.PROFILES))
 
     def _set_store(self, store):
         self.store = copy.deepcopy(store)
@@ -226,6 +226,7 @@ class PerformancePage(Page):
             cb.setCurrentText(store["assign"].get(src, ""))
             cb.blockSignals(False)
         curves = list((desktop.fan_config().get("curves") or {}).keys())
+        curves += [c for c in fanconf.PRESET_CURVES if c not in curves]   # created on first use
         self.cb_fan.blockSignals(True)
         self.cb_fan.clear()
         self.cb_fan.addItem("Non toccare le ventole", None)
@@ -239,9 +240,14 @@ class PerformancePage(Page):
 
     def _enable(self):
         ok = self.ctx.hub_ok
-        for w in (self.btn_assign, self.btn_save, self.btn_new, self.btn_dup, self.btn_ren,
-                  self.btn_del, self.btn_pt):
+        for w in (self.btn_assign, self.btn_save, self.btn_new, self.btn_dup, self.btn_pt):
             w.setEnabled(ok)
+        # the presets always stay in the library (and in Panoramica): editable, not removable
+        preset = self.current in profiles.PRESETS
+        tip = "I profili di serie si possono modificare ma non rinominare o eliminare." if preset else ""
+        for w in (self.btn_ren, self.btn_del):
+            w.setEnabled(ok and not preset)
+            w.setToolTip(tip)
 
     def _select(self, item, _prev=None):
         if item is None:
@@ -300,6 +306,7 @@ class PerformancePage(Page):
             w.blockSignals(False)
         self.dirty = False
         self._update_hints()
+        self._enable()
 
     def _editor_profile(self) -> dict:
         return {

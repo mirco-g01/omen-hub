@@ -26,7 +26,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import __version__, components, cpuconf, fanconf, group, limits, paths, profiles
+from . import __version__, components, cpuconf, fanconf, gpufix, group, limits, paths, profiles
 
 MAX_REQUEST = 1 << 20
 
@@ -116,6 +116,80 @@ def load_fan_config() -> dict:
         return {}
 
 
+# -- NVIDIA RTD3 fix, in the background ------------------------------------------------
+
+class GpuFixJob:
+    """gpufix.apply() in a thread: a DKMS build takes minutes and must not
+    hold the hub lock (the power watcher needs it on plug/unplug). The GUI
+    polls snapshot() through `gpufix status`."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.state = "idle"          # idle | running | done | failed
+        self.step = ""
+        self.log: list[str] = []
+        self.message = ""
+        self.started = self.finished = None
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            return {"state": self.state, "step": self.step, "message": self.message,
+                    "log": "\n".join(self.log)[-6000:], "started": self.started, "finished": self.finished}
+
+    def start(self):
+        with self.lock:
+            if self.state == "running":
+                raise RuntimeError("la correzione è già in corso")
+            self.state, self.step, self.log, self.message = "running", "Preparo…", [], ""
+            self.started, self.finished = time.time(), None
+        threading.Thread(target=self._run, daemon=True, name="gpufix").start()
+
+    def _note(self, text: str, step: bool = False):
+        with self.lock:
+            if step:
+                self.step = text
+            self.log.append(text)
+            del self.log[:-400]
+        log(f"gpufix: {text.splitlines()[0] if text else ''}")
+
+    def _cmd(self, argv, timeout=60):
+        self._note("$ " + " ".join(argv))
+        rc, out = run(argv, timeout=timeout)
+        if out:
+            self._note(out[-3000:])
+        return rc, out
+
+    def _write(self, path: Path, text: str):
+        write_atomic(path, text, mode=0o644, keep_backup=path != gpufix.STATE)
+        self._note(f"scritto {path}")
+
+    def _run(self):
+        try:
+            gpufix.JOB_LOCK.parent.mkdir(parents=True, exist_ok=True)
+            gpufix.JOB_LOCK.write_text(f"{os.getpid()}\n")
+        except OSError:
+            pass
+        try:
+            msg = gpufix.apply(self._cmd, self._write, lambda s: self._note(s, step=True),
+                               dry_run=paths.DRY_RUN)
+            state = "done"
+        except gpufix.GpuFixError as exc:
+            msg, state = str(exc), "failed"
+        except Exception as exc:
+            traceback.print_exc()
+            msg, state = f"errore interno: {exc}", "failed"
+        finally:
+            gpufix.JOB_LOCK.unlink(missing_ok=True)
+        with self.lock:
+            self.state, self.message, self.finished = state, msg, time.time()
+            self.step = "Fatto" if state == "done" else "Non riuscito"
+        log(f"gpufix {state}: {msg}")
+        try:
+            gpufix.write_check(gpufix.status())     # the session notifier re-reads it
+        except Exception:
+            traceback.print_exc()
+
+
 # -- the hub -------------------------------------------------------------------
 
 class Hub:
@@ -123,6 +197,7 @@ class Hub:
         self.lock = threading.RLock()
         self.conf = self._load_conf()
         self.allowed_gid = self._group_id(self.conf.get("admin_group", "wheel"))
+        self.gpufix = GpuFixJob()
 
     @staticmethod
     def _load_conf() -> dict:
@@ -250,11 +325,12 @@ class Hub:
     # profiles -----------------------------------------------------------------
     def _validated_store(self, store):
         curves = list((load_fan_config().get("curves") or {}).keys())
+        curves += [c for c in fanconf.PRESET_CURVES if c not in curves]
         return profiles.validate_store(store, platform_choices=platform_choices(),
                                        curves=curves, freq_range=freq_range())
 
     def cmd_profiles_get(self, req):
-        return {"ok": True, "store": profiles.load(paths.PROFILES, paths.AUTOCPUFREQ_CONF)}
+        return {"ok": True, "store": profiles.load(paths.PROFILES)}
 
     def cmd_profiles_save(self, req):
         try:
@@ -266,7 +342,7 @@ class Hub:
 
     def cmd_profiles_apply(self, req):
         try:
-            store = self._validated_store(profiles.load(paths.PROFILES, paths.AUTOCPUFREQ_CONF))
+            store = self._validated_store(profiles.load(paths.PROFILES))
         except ValueError as exc:
             return {"error": str(exc)}
         return self._apply(store)
@@ -287,6 +363,7 @@ class Hub:
             msgs.append("auto-cpufreq aggiornato e riavviato" if rc == 0 else f"riavvio auto-cpufreq fallito: {out}")
         else:
             msgs.append("auto-cpufreq già allineato")
+        self.ensure_preset_curves(store)
         fan_msg = self.apply_fan_for_source(store)
         if fan_msg:
             msgs.append(fan_msg)
@@ -316,6 +393,17 @@ class Hub:
             return {"ok": True, **limits.info()}
         except Exception as exc:
             return {"error": f"lettura limiti fallita: {exc}"}
+
+    def ensure_preset_curves(self, store) -> None:
+        """Add to the fan library the preset curves the profiles refer to, so
+        they can be picked and edited on the Ventole page."""
+        wanted = [(p.get("fan") or {}).get("curve") for p in store.get("profiles", {}).values()]
+        cfg = load_fan_config()
+        if not cfg:
+            return
+        new = fanconf.with_preset_curves(cfg, [w for w in wanted if w])
+        if new != cfg:
+            write_atomic(paths.FAN_CONF, json.dumps(new, indent=4) + "\n", keep_backup=False)
 
     def apply_fan_for_source(self, store=None) -> str | None:
         """Impose the fan setting of the profile in force, or give back the
@@ -354,7 +442,8 @@ class Hub:
         else:
             return None
         try:
-            new = fanconf.apply_changes(cfg, changes)
+            # a preset curve deleted from the library comes back when needed
+            new = fanconf.apply_changes(fanconf.with_preset_curves(cfg, [(fan or {}).get("curve")]), changes)
         except ValueError as exc:
             return f"ventole non applicate: {exc}"
         if fan:
@@ -418,6 +507,22 @@ class Hub:
         # OMEN keyboard back out of USB autosuspend afterwards.
         rc, out = systemctl("restart", "powertop.service", timeout=120)
         return {"ok": True, "output": out} if rc == 0 else {"error": f"powertop: {out}"}
+
+    # NVIDIA RTD3 fix (kernel >= 7.3) ------------------------------------------------
+    def cmd_gpufix(self, req):
+        action = str(req.get("action", "status"))
+        if action == "job":           # cheap: what the GUI polls while a job runs
+            return {"ok": True, "job": self.gpufix.snapshot()}
+        if action == "status":
+            return {"ok": True, "status": gpufix.status().as_dict(), "job": self.gpufix.snapshot()}
+        if action != "apply":
+            return {"error": f"azione non valida: {action}"}
+        try:
+            self.gpufix.start()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        log("gpufix: avviata dall'app")
+        return {"ok": True, "job": self.gpufix.snapshot()}
 
     # tests (Test page) ------------------------------------------------------------
     # Read-only probes that need root, plus the RTC alarm for the standby test.
@@ -550,6 +655,25 @@ class Server(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
 
 
+def gpufix_check() -> int:
+    """After a pacman transaction on the driver or the kernel: one line in
+    pacman's output, and the check file that wakes the session notifier.
+    Silent while the hub's own apply is the one running pacman."""
+    try:
+        st = gpufix.status()
+        if st.code == "running":
+            return 0
+        if st.code in ("needed", "lost", "ineffective"):
+            print(f"OMEN Hub: {st.title}. {st.detail}")
+            print("OMEN Hub: apri OMEN Hub e premi «Applica correzione» (o la notifica).")
+        elif st.code == "reboot":
+            print(f"OMEN Hub: {st.title}.")
+        gpufix.write_check(st)
+    except Exception as exc:          # never fail a pacman transaction
+        print(f"OMEN Hub: controllo correzione GPU non riuscito: {exc}")
+    return 0
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     # install.sh / uninstall.sh: the PartOf drop-ins of the OMEN group.
@@ -559,6 +683,9 @@ def main(argv=None):
     if argv[:1] == ["--remove-group"]:
         print("\n".join(group.remove_dropins()))
         return 0
+    # pacman hook (95-omen-hub-gpufix.hook), after DKMS and mkinitcpio.
+    if argv[:1] == ["--gpufix-check"]:
+        return gpufix_check()
     sock_path = paths.SOCKET
     hub = Hub()
     Path(sock_path).parent.mkdir(parents=True, exist_ok=True)

@@ -572,12 +572,21 @@ class RingGauge(QWidget):
 
 class CurveEditor(QWidget):
     """Drag points; double-click adds one, right-click removes it.
-    Shows where the fans are right now (control temperature → %)."""
+    Shows where the fans are right now (control temperature → %).
+    `changed` fires while dragging, `committed` once the edit is over."""
     changed = pyqtSignal()
+    committed = pyqtSignal()
     T_MIN, T_MAX = 30.0, 105.0
+    X_TICKS = range(30, 106, 15)
+    X_TICK_FMT = "{:.0f}°"
+    POINT_FMT = "{t:.0f} °C → {v:.0f} %"
+    MARKER_FMT = "ora {t:.0f} °C → {v:.0f} %"
+    X_TITLE: str | None = None        # axis titles, drawn when set
+    Y_TITLE: str | None = None
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.x_title, self.y_title = self.X_TITLE, self.Y_TITLE
         self.points: list[list[float]] = []
         self.drag: int | None = None
         self.hover: int | None = None
@@ -595,7 +604,9 @@ class CurveEditor(QWidget):
         self.update()
 
     def _plot(self):
-        return QRectF(46, 14, max(10, self.width() - 62), max(10, self.height() - 44))
+        left = 46 + (22 if self.y_title else 0)
+        bottom = 30 + (20 if self.x_title else 0)
+        return QRectF(left, 14, max(10, self.width() - left - 16), max(10, self.height() - 14 - bottom))
 
     def _to_px(self, t, v):
         r = self._plot()
@@ -619,6 +630,7 @@ class CurveEditor(QWidget):
         if e.button() == Qt.MouseButton.RightButton and i is not None and len(self.points) > 2:
             del self.points[i]
             self.changed.emit()
+            self.committed.emit()
             self.update()
         elif e.button() == Qt.MouseButton.LeftButton:
             self.drag = i
@@ -629,6 +641,7 @@ class CurveEditor(QWidget):
             self.points.append([round(t, 1), round(v, 1)])
             self.points.sort()
             self.changed.emit()
+            self.committed.emit()
             self.update()
 
     def mouseMoveEvent(self, e):
@@ -643,6 +656,8 @@ class CurveEditor(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, _):
+        if self.drag is not None:
+            self.committed.emit()
         self.drag = None
 
     def paintEvent(self, _):
@@ -657,13 +672,24 @@ class CurveEditor(QWidget):
             p.setPen(T.faint)
             p.drawText(QRectF(0, y - 8, r.left() - 8, 16),
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{v}%")
-        for t in range(30, 106, 15):
+        p.setPen(T.muted)
+        if self.x_title:
+            p.drawText(QRectF(r.left(), r.bottom() + 8 + fm.height(), r.width(), fm.height() + 4),
+                       Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.x_title)
+        if self.y_title:
+            p.save()
+            p.translate(2, r.center().y())
+            p.rotate(-90)
+            p.drawText(QRectF(-r.height() / 2, 0, r.height(), fm.height() + 2),
+                       Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.y_title)
+            p.restore()
+        for t in self.X_TICKS:
             x = self._to_px(t, 0).x()
             p.setPen(QPen(T.grid, 1))
             p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()))
             p.setPen(T.faint)
             p.drawText(QRectF(x - 20, r.bottom() + 6, 40, fm.height()),
-                       Qt.AlignmentFlag.AlignHCenter, f"{t}°")
+                       Qt.AlignmentFlag.AlignHCenter, self.X_TICK_FMT.format(t))
         if not self.points:
             return
         pts = [self._to_px(t, v) for t, v in self.points]
@@ -694,7 +720,10 @@ class CurveEditor(QWidget):
             t, v = self.points[i]
             p.setPen(T.text)
             pt = pts[i]
-            p.drawText(QPointF(pt.x() + 10, pt.y() - 10), f"{t:.0f} °C → {v:.0f} %")
+            tip = self.POINT_FMT.format(t=t, v=v)
+            tx = pt.x() + 10 if pt.x() + 10 + fm.horizontalAdvance(tip) < r.right() else \
+                pt.x() - 10 - fm.horizontalAdvance(tip)
+            p.drawText(QPointF(tx, max(r.top() + fm.height(), pt.y() - 10)), tip)
         if self.marker:
             t, v = self.marker
             pt = self._to_px(max(self.T_MIN, min(self.T_MAX, t)), v)
@@ -704,5 +733,5 @@ class CurveEditor(QWidget):
             p.setBrush(T.series[1])
             p.drawEllipse(pt, 5, 5)
             p.setPen(T.text)
-            p.drawText(QPointF(min(pt.x() + 8, r.right() - 110), r.top() + 14),
-                       f"ora {t:.0f} °C → {v:.0f} %")
+            mark = self.MARKER_FMT.format(t=t, v=v)
+            p.drawText(QPointF(min(pt.x() + 8, r.right() - fm.horizontalAdvance(mark)), r.top() + 14), mark)

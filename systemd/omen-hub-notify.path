@@ -1,0 +1,11 @@
+[Unit]
+Description=OMEN Hub: controlla gli avvisi dopo gli aggiornamenti di driver e kernel
+Documentation=file:///usr/local/lib/omen-hub/README.md
+
+[Path]
+# Rewritten by the pacman hook 95-omen-hub-gpufix.hook and by omen-hubd.
+PathChanged=/var/lib/omen-hub/gpufix-check.json
+Unit=omen-hub-notify.service
+
+[Install]
+WantedBy=default.target

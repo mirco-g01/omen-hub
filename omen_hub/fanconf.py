@@ -18,6 +18,15 @@ CLEANER_DURATION_RANGE = (10, 90)   # the EC drops user fan control after 120 s
 CLEANER_SPEED_RANGE = (10, 60)      # x100 RPM
 CLEANER_MAX_TEMP = 75
 
+# Curves the hub's presets refer to: added to the library the first time a
+# profile needs them, then editable like any other (an edited copy is kept).
+# "Sempre attive" (Massime): never below 30 % (~1800 RPM), and steeper than
+# the default curve, so the heat is moved before it builds up.
+ALWAYS_ON_CURVE = "Sempre attive"
+PRESET_CURVES = {
+    ALWAYS_ON_CURVE: [[30, 30], [55, 30], [65, 45], [75, 70], [82, 90], [88, 100], [105, 100]],
+}
+
 
 def _int(v, lo, hi, what):
     try:
@@ -134,6 +143,23 @@ def apply_changes(cfg: dict, changes: dict) -> dict:
             cfg["cleaner_speed"] = _int(val, *CLEANER_SPEED_RANGE, "velocità pulizia")
         else:
             raise ValueError(f"opzione ventole non gestita: {key}")
+    _sync_curve(cfg)
+    return cfg
+
+
+def with_preset_curves(cfg: dict, names) -> dict:
+    """``cfg`` plus the preset curves among ``names`` that it lacks (the
+    active curve and mode are left alone)."""
+    missing = [n for n in dict.fromkeys(names)
+               if n in PRESET_CURVES and n not in (cfg.get("curves") or {})]
+    if not missing:
+        return cfg
+    cfg = json.loads(json.dumps(cfg))
+    curves = cfg.setdefault("curves", {})
+    if len(curves) == 0 and cfg.get("curve"):
+        curves["Default"] = cfg["curve"]
+    for n in missing:
+        curves[n] = validate_points(PRESET_CURVES[n])
     _sync_curve(cfg)
     return cfg
 

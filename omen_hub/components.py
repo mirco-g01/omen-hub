@@ -103,6 +103,12 @@ COMPONENTS: tuple[Component, ...] = (
         uninstall=("/bin/bash", str(RGB_REPO / "contrib/omen-f1/install.sh"), "remove"),
         cwd=str(RGB_REPO / "contrib/omen-f1"), source="~/omen-rgb-keyboard/contrib/omen-f1"),
     Component(
+        "adaptive-light", "Luminosità adattiva", "Illuminazione e tastiera",
+        "Schermo e tastiera seguono la luce della stanza, misurata con uno scatto "
+        "della webcam ogni 30 s. Si ferma se un'altra app usa la fotocamera.",
+        units=(Unit("omen-hub-luce.service", "user"),), source="OMEN Hub (omen_hub/adaptived.py)",
+        notes="Si configura in Luci e schermo → Luminosità adattiva."),
+    Component(
         "mute-monitor", "LED muto", "Illuminazione e tastiera",
         "Accende il LED del tasto muto seguendo PipeWire (event-driven, pactl subscribe).",
         units=(Unit("omen-mute-monitor.service", "user"),), source="~/omen-power-fix"),
@@ -300,6 +306,18 @@ def health_checks() -> list[Check]:
         "RTD3 GPU (D3cold a riposo)", bool(hits),
         hits[0] if hits else "NVreg_DynamicPowerManagement=0x02 non trovato in /etc/modprobe.d",
         "" if hits else "Senza RTD3 la RTX resta accesa: ~+6,5 W a riposo."))
+
+    # 18/11/2026: kernel 7.3 + nvidia-open, "Runtime D3 status: Not supported"
+    try:
+        from . import gpufix
+        st = gpufix.status()
+        checks.append(Check(
+            "RTD3 attivo nel driver NVIDIA (kernel 7.3)",
+            None if st.code in ("na", "running") else st.code == "ok",
+            f"{st.title}: {st.detail}" if st.code != "ok" else st.detail,
+            "Il pulsante è nella barra in cima alla finestra." if st.action else ""))
+    except Exception as exc:
+        checks.append(Check("RTD3 attivo nel driver NVIDIA (kernel 7.3)", None, f"controllo non riuscito: {exc}"))
 
     sleep_dir = paths.SLEEP_DIR
     stray = []

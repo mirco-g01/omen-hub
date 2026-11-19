@@ -16,7 +16,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
-from omen_hub import cpuconf, fanconf, profiles  # noqa: E402
+from omen_hub import cpuconf, fanconf, gpufix, notify, profiles  # noqa: E402
 
 REAL_CONF = """# Impostazioni globali
 [settings]
@@ -106,6 +106,13 @@ class FanConfTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=str(ch)):
                 fanconf.apply_changes(self.base, ch)
 
+    def test_with_preset_curves(self):
+        new = fanconf.with_preset_curves(self.base, [fanconf.ALWAYS_ON_CURVE, None, "Default"])
+        self.assertIn(fanconf.ALWAYS_ON_CURVE, new["curves"])
+        self.assertEqual(new["active_curve"], "Default")                    # active one untouched
+        self.assertNotIn(fanconf.ALWAYS_ON_CURVE, self.base["curves"])      # input untouched
+        self.assertIs(fanconf.with_preset_curves(self.base, ["Default"]), self.base)
+
     def test_curve_value(self):
         pts = [[30, 0], [50, 20], [90, 100]]
         self.assertEqual(fanconf.curve_value(pts, 20), 0)
@@ -114,16 +121,36 @@ class FanConfTest(unittest.TestCase):
 
 
 class ProfilesTest(unittest.TestCase):
-    def test_seed_imports_current_config(self):
-        store = profiles.seed_from_cpufreq(REAL_CONF)
-        self.assertEqual(store["assign"], {"ac": "Rete (attuale)", "battery": "Batteria (attuale)"})
-        self.assertEqual(store["profiles"]["Rete (attuale)"]["turbo"], "always")
+    def test_seed_is_presets_only(self):
+        store = profiles.seed()
+        self.assertEqual(list(store["profiles"]), ["Silenzioso", "Bilanciato", "Prestazioni", "Massime"])
+        self.assertEqual(store["assign"], {"ac": "Prestazioni", "battery": "Silenzioso"})
         v = profiles.validate_store(store, platform_choices=["low-power", "balanced", "performance"],
-                                    curves=["Default"], freq_range=(800, 5500))
-        # applying the seeded store must not change auto-cpufreq's behaviour
-        ac = v["profiles"][v["assign"]["ac"]]
-        bat = v["profiles"][v["assign"]["battery"]]
-        self.assertEqual(cpuconf.parse(cpuconf.render(REAL_CONF, ac, bat)), cpuconf.parse(REAL_CONF))
+                                    curves=["Default", *fanconf.PRESET_CURVES], freq_range=(800, 5500))
+        ac = cpuconf.parse(cpuconf.render(REAL_CONF, v["profiles"]["Prestazioni"],
+                                          v["profiles"]["Silenzioso"]))
+        self.assertEqual(ac["charger"]["platform_profile"], "performance")   # cTGP: GPU 115 -> 140 W
+        self.assertNotIn("scaling_min_freq", ac["charger"])                  # auto-cpufreq puts back 800 MHz
+        self.assertEqual(ac["battery"]["platform_profile"], "low-power")
+
+    def test_prestazioni_vs_massime(self):
+        pr, mx = profiles.PRESETS["Prestazioni"], profiles.PRESETS["Massime"]
+        for k in ("platform_profile", "turbo", "pl1", "pl2", "gpu_clock"):
+            self.assertEqual(pr.get(k), mx.get(k), k)                        # same watts
+        self.assertGreater(mx["min_freq"], pr["min_freq"] or 0)
+        self.assertEqual(mx["fan"], {"mode": "curve", "curve": fanconf.ALWAYS_ON_CURVE})
+        self.assertGreater(min(p for _t, p in fanconf.PRESET_CURVES[fanconf.ALWAYS_ON_CURVE]), 0)
+
+    def test_with_presets_order_and_edits(self):
+        mine = {"profiles": {"Gioco": dict(profiles.PRESETS["Bilanciato"]),
+                             "Massime": dict(profiles.PRESETS["Massime"], min_freq=3000),
+                             "Silenzioso": dict(profiles.PRESETS["Silenzioso"])},
+                "assign": {"ac": "Gioco", "battery": "Silenzioso"}}
+        out = profiles.with_presets(mine)
+        self.assertEqual(list(out["profiles"]),
+                         ["Silenzioso", "Bilanciato", "Prestazioni", "Massime", "Gioco"])
+        self.assertEqual(out["profiles"]["Massime"]["min_freq"], 3000)      # user edit kept
+        self.assertEqual(out["assign"], mine["assign"])
 
     def test_validation(self):
         good = dict(profiles.PRESETS["Prestazioni"])
@@ -224,7 +251,7 @@ class DaemonTest(unittest.TestCase):
 
     def test_profiles_roundtrip(self):
         store = self.send({"cmd": "profiles.get"})["store"]
-        store["assign"] = {"ac": "Rete (attuale)", "battery": "Silenzioso"}
+        store["assign"] = {"ac": "Prestazioni", "battery": "Silenzioso"}
         r = self.send({"cmd": "profiles.save", "store": store})
         self.assertTrue(r["changed"])
         conf = cpuconf.parse((self.root / "etc/auto-cpufreq.conf").read_text())
@@ -235,19 +262,23 @@ class DaemonTest(unittest.TestCase):
         self.assertTrue((self.root / "etc/omen-hub/profiles.json").exists())
 
     def test_profile_fan_override_is_undone(self):
-        """Massime (fans max) then Silenzioso (fans untouched) must give the
-        fans back to what the user had: the bug of 12/10."""
+        """Massime (always-on curve) then Silenzioso (fans untouched) must give
+        the fans back to what the user had: the bug of 12/10."""
         cfg_path = self.root / "etc/omen-fan-control/config.json"
         self.send({"cmd": "fan.set", "changes": {"mode": "curve"}})
         store = self.send({"cmd": "profiles.get"})["store"]
         src = "ac" if Path("/sys/class/power_supply/AC/online").read_text().strip() == "1" else "battery"
         store["assign"][src] = "Massime"
         self.send({"cmd": "profiles.save", "store": store})
-        self.assertEqual(json.loads(cfg_path.read_text())["mode"], "max")
+        cfg = json.loads(cfg_path.read_text())
+        self.assertEqual((cfg["mode"], cfg["active_curve"]), ("curve", fanconf.ALWAYS_ON_CURVE))
+        self.assertEqual(cfg["curve"], cfg["curves"][fanconf.ALWAYS_ON_CURVE])  # what the daemon runs
         self.assertTrue((self.root / "var/lib/omen-hub/fan-override.json").exists())
         store["assign"][src] = "Silenzioso"
         r = self.send({"cmd": "profiles.save", "store": store})
-        self.assertEqual(json.loads(cfg_path.read_text())["mode"], "curve", r)
+        cfg = json.loads(cfg_path.read_text())
+        self.assertEqual((cfg["mode"], cfg["active_curve"]), ("curve", "Default"), r)
+        self.assertIn(fanconf.ALWAYS_ON_CURVE, cfg["curves"])                 # stays in the library
         self.assertFalse((self.root / "var/lib/omen-hub/fan-override.json").exists())
         # a user choice while overridden becomes the new base
         store["assign"][src] = "Massime"
@@ -271,6 +302,41 @@ class DaemonTest(unittest.TestCase):
         self.send({"cmd": "fan.clean", "action": "run", "duration": 20})
         req = json.loads((self.root / "etc/omen-fan-control/cleaner.request").read_text())
         self.assertEqual(req["duration"], 20)
+
+    def test_gpufix_status_and_job(self):
+        from omen_hub import protocol
+        r = self.send({"cmd": "gpufix", "action": "status"})
+        self.assertIn(r["status"]["code"], ("na", "ok", "needed", "lost", "reboot", "ineffective",
+                                             "running", "other"))
+        # the daemon is shared: the dry-run apply may have gone first
+        self.assertIn(self.send({"cmd": "gpufix", "action": "job"})["job"]["state"], ("idle", "done"))
+        with self.assertRaises(protocol.HubError):
+            self.send({"cmd": "gpufix", "action": "exec"})
+
+    def test_gpufix_apply_dry_run(self):
+        """On this laptop (kernel >= 7.3, nvidia-open-dkms): the job patches a
+        scratch copy of the DKMS source and only logs dkms/mkinitcpio."""
+        pkg, ver = gpufix.driver_package()
+        if pkg != gpufix.DKMS or gpufix.kernel_tuple(os.uname().release) < gpufix.NEEDS_KERNEL:
+            self.skipTest("serve nvidia-open-dkms con kernel >= 7.3")
+        src = self.root / f"usr/src/nvidia-{ver}/kernel-open/nvidia/nv-pci.c"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text(NV_PCI_SNIPPET)
+        (self.root / f"usr/src/nvidia-{ver}/dkms.conf").write_text('PACKAGE_NAME="nvidia"\n')
+        self.send({"cmd": "gpufix", "action": "apply"})
+        for _ in range(100):
+            job = self.send({"cmd": "gpufix", "action": "job"})["job"]
+            if job["state"] != "running":
+                break
+            time.sleep(0.1)
+        self.assertEqual(job["state"], "done", job)
+        self.assertEqual(gpufix.source_state(src.read_text()), "patched")
+        self.assertTrue(list((self.root / "var/lib/omen-hub/backup").glob("nv-pci.c.*")))
+        self.assertIn(f"dkms build --force nvidia/{ver}", job["log"])
+        state = json.loads((self.root / "var/lib/omen-hub/gpufix.json").read_text())
+        self.assertEqual(state["version"], ver)
+        self.assertFalse((self.root / "run/omen-hub/gpufix.job").exists())
+        self.assertTrue((self.root / "var/lib/omen-hub/gpufix-check.json").exists())
 
     def test_hook_park_and_restore(self):
         hook = self.root / "usr/lib/systemd/system-sleep/free-vram-on-suspend.sh"
@@ -319,3 +385,95 @@ class GroupTest(unittest.TestCase):
             self.assertFalse(fan.exists() or fan.parent.exists())
             self.assertFalse(mute.exists())
             self.assertTrue(other.exists())
+
+
+NV_PCI_SNIPPET = """#include <linux/completion.h>
+#include <linux/iommu.h>
+#include <linux/kthread.h>
+
+#if defined(NV_SEQ_READ_ITER_PRESENT)
+#include <linux/seq_file.h>
+#endif
+
+static void nv_get_pci_sysfs_config(struct pci_dev *pci_dev, nv_linux_state_t *nvl)
+{
+    char filename[50];
+    int ret = snprintf(filename, sizeof(filename), "/sys/bus/pci/devices/%04x:%02x:%02x.0/config", 0, 0, 0);
+    if (ret > 0 && ret < sizeof(filename))
+    {
+        struct file *file = filp_open(filename, O_RDONLY, 0);
+        if (!IS_ERR(file))
+        {
+            nvl->sysfs_config_file = file;
+        }
+    }
+}
+"""
+
+
+class GpuFixTest(unittest.TestCase):
+    """The RTD3 fix of 18/11/2026: kernel 7.3 + nvidia-open, "Runtime D3 status: Not supported"."""
+
+    def facts(self, **kw):
+        base = dict(kernel="7.3.4-arch1-2", kernels=["7.3.4-arch1-2"], gpu="/sys/bus/pci/devices/0000:02:00.0",
+                    runtime_status="active", rtd3="Not supported", regkey=2, pkg=gpufix.PREBUILT,
+                    ver="620.70.06", boot_time=1000.0)
+        base.update(kw)
+        return gpufix.Facts(**base)
+
+    def code(self, **kw):
+        return gpufix.verdict(self.facts(**kw)).code
+
+    def test_patch_matches_cachyos_and_is_idempotent(self):
+        out = gpufix.patch_text(NV_PCI_SNIPPET)
+        self.assertIn("#include <linux/kthread.h>\n#include <linux/fs_struct.h>\n#include <linux/version.h>\n", out)
+        self.assertIn("        scoped_with_init_fs()\n            file = filp_open(filename, O_RDONLY, 0);\n", out)
+        self.assertIn("#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 3, 0)", out)
+        self.assertEqual(gpufix.source_state(out), "patched")
+        self.assertEqual(gpufix.patch_text(out), out)
+        upstream = NV_PCI_SNIPPET.replace("struct file *file = filp_open(filename, O_RDONLY, 0);",
+                                          "struct file *file;\n        scoped_with_init_fs() file = filp_open(filename, O_RDONLY, 0);")
+        self.assertEqual(gpufix.source_state(upstream), "upstream")
+        self.assertEqual(gpufix.patch_text(upstream), upstream)
+
+    def test_patch_refuses_a_changed_source(self):
+        for bad in (NV_PCI_SNIPPET.replace(gpufix.OPEN_ANCHOR, ""), NV_PCI_SNIPPET + gpufix.INCLUDE_ANCHOR):
+            with self.assertRaises(gpufix.GpuFixError):
+                gpufix.patch_text(bad)
+
+    def test_verdicts(self):
+        D = gpufix.DKMS
+        self.assertEqual(self.code(), "needed")                                   # 18/11, prebuilt
+        self.assertEqual(self.code(pkg=D, src_state="unfixed"), "needed")
+        self.assertEqual(self.code(pkg=D, src_state="patched", dkms_built=False), "needed")   # not rebuilt
+        self.assertEqual(self.code(pkg=D, src_state="patched", dkms_built=True, module_mtime=2000.0), "reboot")
+        self.assertEqual(self.code(pkg=D, src_state="patched", dkms_built=True, module_mtime=500.0,
+                                   applied_at=600.0), "ineffective")
+        self.assertEqual(self.code(pkg=D, src_state="patched", dkms_built=True, runtime_status="suspended",
+                                   rtd3=None), "ok")
+        # nvidia-open-dkms updated: the running module still works, the next boot will not
+        self.assertEqual(self.code(pkg=D, src_state="unfixed", runtime_status="suspended", rtd3=None), "lost")
+        self.assertEqual(self.code(pkg=D, src_state="upstream", dkms_built=True,
+                                   rtd3="Enabled (fine-grained)"), "ok")
+        self.assertEqual(self.code(runtime_status="suspended", rtd3=None), "ok")   # a prebuilt that works
+        self.assertEqual(self.code(kernel="7.2.11-arch1-1"), "other")
+        self.assertEqual(self.code(kernel="7.2.11-arch1-1", runtime_status="suspended", rtd3=None), "na")
+        self.assertEqual(self.code(regkey=0), "na")
+        self.assertEqual(self.code(gpu=None), "na")
+        self.assertEqual(self.code(pkg="nvidia"), "other")
+        self.assertEqual(self.code(job_running=True), "running")
+        self.assertEqual(gpufix.verdict(self.facts()).action, "apply")
+
+    def test_notify_once_per_situation(self):
+        a = gpufix.verdict(self.facts())
+        self.assertTrue(notify.should_notify(a, None))
+        self.assertFalse(notify.should_notify(a, a.signature()))
+        newer = gpufix.verdict(self.facts(ver="620.80.01"))
+        self.assertTrue(notify.should_notify(newer, a.signature()))
+        reboot = gpufix.verdict(self.facts(pkg=gpufix.DKMS, src_state="patched", dkms_built=True,
+                                           module_mtime=2000.0))
+        self.assertFalse(notify.should_notify(reboot, None))
+
+    def test_kernel_tuple(self):
+        self.assertEqual(gpufix.kernel_tuple("7.3.4-arch1-2"), (7, 3))
+        self.assertLess(gpufix.kernel_tuple("6.18.63-3-lts"), gpufix.NEEDS_KERNEL)

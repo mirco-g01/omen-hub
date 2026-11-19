@@ -8,14 +8,17 @@
 # finestra fa abortire la sospensione. Senza modello la stessa fase dura ~5 s.
 # Misurato: 24,5 s con il modello, 5,4 s senza.
 #
-# Copre i due modi in cui questa macchina tiene un modello in VRAM:
-#   - llama-server avviato da ~/.local/lib/llm-serve.sh (comandi `ai`, `ai-server`)
+# Copre i due modi in cui questa macchina puo' tenere un modello in VRAM:
+#   - qualunque llama-server dell'utente, comunque sia stato avviato. Oggi e'
+#     l'unita' utente llama-lfm25.service, il worker locale di Claude Code
 #   - ollama.service
 #
-# llama-server non viene riavviato al risveglio: `ai` chiama ls_ensure_model,
-# che lo riavvia da solo al primo uso. ollama invece si', perche' e' un servizio
-# di sistema che ci si aspetta sia sempre su.
+# llama-server non viene riavviato al risveglio: il bridge MCP
+# (~/.local/share/local-llm-mcp/server.py) lo riavvia alla prima chiamata.
+# ollama invece si', perche' e' un servizio di sistema che ci si aspetta sia
+# sempre su.
 #
+# Sorgente: ~/.local/share/local-llm-mcp/free-vram-on-suspend.sh
 # Installazione (systemd legge SOLO questa directory, non /etc/systemd/system-sleep):
 #   sudo install -Dm755 free-vram-on-suspend.sh \
 #        /usr/lib/systemd/system-sleep/free-vram-on-suspend.sh
@@ -23,7 +26,7 @@
 # systemd esegue *ogni* file eseguibile in quella directory, in parallelo:
 # non lasciarci copie di backup con il bit di esecuzione.
 
-PIDFILE=/home/mircogiorgi/.local/state/llm-serve/llama-server.pid
+LLM_USER=mircogiorgi
 FLAG=/run/free-vram-on-suspend.ollama-stopped
 
 log() { logger -t free-vram-on-suspend "$*"; }
@@ -43,20 +46,16 @@ wait_exit() {
     done
 }
 
-stop_llama_server() {
-    [ -f "$PIDFILE" ] || return 0
-    pid=$(cat "$PIDFILE" 2>/dev/null) || return 0
-    case "$pid" in ''|*[!0-9]*) return 0 ;; esac
-    kill -0 "$pid" 2>/dev/null || { rm -f "$PIDFILE"; return 0; }
-    # Che sia davvero llama-server e non un pid riciclato.
-    case "$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" in
-        *llama-server*) ;;
-        *) return 0 ;;
-    esac
-    log "fermo llama-server (pid $pid)"
-    kill "$pid" 2>/dev/null
-    wait_exit "$pid"
-    rm -f "$PIDFILE"
+# L'unita' utente non ha Restart=, quindi il SIGTERM non la fa ripartire.
+stop_llama_servers() {
+    pids=$(pgrep -x -u "$LLM_USER" llama-server 2>/dev/null) || return 0
+    for pid in $pids; do
+        log "fermo llama-server (pid $pid)"
+        kill "$pid" 2>/dev/null
+    done
+    for pid in $pids; do
+        wait_exit "$pid"
+    done
 }
 
 # Ollama tiene il modello in VRAM in un processo figlio ("ollama runner").
@@ -72,7 +71,7 @@ stop_ollama() {
 
 case "$1" in
     pre)
-        stop_llama_server
+        stop_llama_servers
         stop_ollama
         ;;
     post)

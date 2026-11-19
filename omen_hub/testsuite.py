@@ -251,6 +251,20 @@ def _holders_text(h):
     return ", ".join(f"{x['comm']} [{x['pid']}] {x['fds']} fd" for x in h)
 
 
+def _rtd3_verdict(rp: Report):
+    """When the GPU stays awake: is it the driver that gave up on RTD3 (kernel 7.3 bug)?"""
+    try:
+        from . import gpufix
+        st = gpufix.status()
+    except Exception:
+        return
+    why = gpufix.explain_for_report(st)
+    if why:
+        rp.verdict("fail", f"causa: {why} Correzione: barra in cima a OMEN Hub.")
+    elif st.facts.get("rtd3"):
+        rp.line(f"Runtime D3 status del driver: {st.facts['rtd3']}.")
+
+
 def t_gpu(rp: Report, pr: Probes):
     rp.section("gpu", "GPU NVIDIA")
     if not pr.gpu:
@@ -279,6 +293,7 @@ def t_gpu(rp: Report, pr: Probes):
                    "la GPU resta accesa a riposo. Processi con la NVIDIA aperta: " + _holders_text(holders)
                    + ". Se nessuno la usa davvero: auto-cpufreq con enforce_platform_profile, una regola "
                      "udev con power/control=on, o un contesto Vulkan/compute.")
+        _rtd3_verdict(rp)
     rp.line(f"Stato a riposo, un campione al secondo: {' → '.join(dict.fromkeys(s.get('gpu') or '?' for s in idle))}"
             + (" (HDMI collegato)." if pr.hdmi_connected() else "."))
     rp.line("")
@@ -392,6 +407,7 @@ def t_idle(rp: Report, pr: Probes):
                       "fail": ": alto. Di solito è la GPU accesa o un processo che non dorme."}[kind])
     if samples and gpu_off < len(samples) * 0.8:
         rp.verdict("fail", "la GPU NVIDIA è rimasta accesa durante la misura a riposo (~6-10 W sprecati).")
+        _rtd3_verdict(rp)
     if top and top[0]["cpu"] > 15:
         rp.verdict("warn", f"«{top[0]['comm']}» ha usato il {top[0]['cpu']} % di un core a riposo.")
     rp.put("battery_noHDMI [t, bat_w, cpu_w, gpu, ctrl, fan1, fan2]",
